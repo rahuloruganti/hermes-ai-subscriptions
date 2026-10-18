@@ -216,7 +216,7 @@ function PlanCard({ plan, compact }) {
       ? h('div', { style: S.faint }, plan.windows.filter(w => w.detail).map(w => w.label + ': ' + w.detail).join('  ·  '))
       : null,
     plan.details.length ? h('div', { style: { ...S.muted, display: 'flex', flexDirection: 'column', gap: 2 } }, plan.details.slice(0, compact ? 2 : 6).map((d, i) => h('div', { key: i }, d))) : null,
-    !hasNumbers && !plan.details.length ? h('div', { style: S.faint }, plan.failed ? 'live check failed, no earlier reading' : 'waiting for the first live reading') : null,
+    !hasNumbers && !plan.details.length ? h('div', { style: S.faint }, 'signed in, but Hermes reports no quota figure for this provider') : null,
     h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 6 } },
       h('span', { style: { ...S.faint, color: a.live ? 'var(--ui-text-secondary)' : 'var(--ui-text-quaternary)' } }, hasNumbers || plan.live ? a.text : ''),
       !compact && plan.sources.length ? h('span', { style: S.faint }, plan.sources.join(' · ')) : null))
