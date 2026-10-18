@@ -1,0 +1,10 @@
+name: ai-subscriptions
+version: 0.1.0
+description: "Your AI subscriptions, live quota and token usage across Hermes, Claude Code and the Grok CLI, as a page, tabs and a status-bar picker in Hermes Desktop."
+author: rahuloruganti
+manifest_version: 1
+kind: standalone
+provides_tools: []
+provides_hooks: []
+provides_middleware: []
+requires_env: []
