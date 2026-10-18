@@ -27,8 +27,3 @@ No credential, `.env` or `auth.json` reads. No provider API calls from the plugi
 ## Full edition
 
 A fuller version with live Claude, Grok, Nous and Copilot polling lives in the repository root. It reads local logins and so is not part of the catalog.
-
-## Screenshots
-
-![Plans tab and the status-bar picker](../assets/plans-and-picker.png)
-![Usage tab](../assets/usage.png)
