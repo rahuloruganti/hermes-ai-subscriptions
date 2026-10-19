@@ -424,7 +424,9 @@ def _speed_samples_hermes() -> list:
                 continue
             ts, spent, tokens = _num(row.get("ts")), _num(row.get("sec")), _num(row.get("out"))
             model = str(row.get("model") or "")
-            if ts <= 0 or spent <= 0 or tokens <= 0 or not model:
+            # Replies under 20 output tokens are mostly time-to-first-token, so they
+            # would read as an absurdly slow rate for a fast model.
+            if ts <= 0 or spent <= 0 or tokens < 20 or not model:
                 continue
             out.append({"src": "hermes", "ts": ts, "model": model, "out": tokens, "sec": spent})
     return out
