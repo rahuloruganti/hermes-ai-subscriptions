@@ -12,6 +12,12 @@ There are two editions in this repo.
 | Token usage (Hermes, Claude Code, Grok CLI) | yes | yes |
 | Status-bar picker, tabs | yes | yes |
 
+## What it does
+
+- A page with **Overview**, **Usage** and **Plans** tabs, and a status-bar chip whose popover lets you pick which subscriptions stay in the status bar.
+- **Usage** covers 7, 30 or 90 days across Hermes, Claude Code and the Grok CLI, per day, per model and per source, with a list-price estimate.
+- **Click any day in the chart** for that day's breakdown: tokens, calls, cost, per-source split with the input/output/cache mix, the models that ran, and an hour-by-hour strip with the busiest hour.
+
 ## Install
 
 Full edition (reads local logins, read this section first):

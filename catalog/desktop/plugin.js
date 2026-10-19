@@ -257,7 +257,85 @@ function StackChart({ days, selected, onPick }) {
     },
       d.tokens === 0
         ? h('div', { style: { height: 3, background: 'var(--ui-stroke-secondary)', borderRadius: 2, opacity: 0.6 } })
-        : d.parts.filter(p => p.tokens > 0).map(p => h('div', { key: p.id, style: { height: (p.tokens / max * 100).toFixed(2) + '%', minHeight: 2, background: SRC[p.id].color } })))))
+        : d.parts.filter(p => p.tokens > 0).map(p => h('div', { key: p.id, style: { height: (p.tokens / max * 100).toFixed(2) + '%', minHeight: 2, background: SRC[p.id].color, opacity: selected && selected !== d.date ? 0.45 : 1 } })))))
+}
+
+function MiniStat({ label, value, sub }) {
+  return h('div', { style: { minWidth: 92 } },
+    h('div', { style: { fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ui-text-quaternary)' } }, label),
+    h('div', { style: { fontSize: 14, fontWeight: 600, fontVariantNumeric: 'tabular-nums' } }, value),
+    sub ? h('div', { style: S.faint }, sub) : null)
+}
+
+function ShareBar({ value, max, color }) {
+  const pct = max ? Math.max(1, value / max * 100) : 0
+  return h('div', { style: { height: 3, background: 'var(--ui-stroke-secondary)', borderRadius: 2, overflow: 'hidden' } },
+    h('div', { style: { width: pct.toFixed(1) + '%', height: '100%', background: color, borderRadius: 2 } }))
+}
+
+function HourStrip({ hours, peak }) {
+  const max = Math.max(1, ...hours)
+  return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+    h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: 2, height: 34 } },
+      ...hours.map((v, i) => h('div', {
+        key: i,
+        title: String(i).padStart(2, '0') + ':00 to ' + String(i + 1).padStart(2, '0') + ':00, ' + fmtNum(v) + ' tokens',
+        style: {
+          flex: 1, height: Math.max(2, (v / max * 100)).toFixed(1) + '%', borderRadius: 1,
+          background: v ? (i === peak ? 'var(--ui-accent)' : 'var(--ui-text-quaternary)') : 'var(--ui-stroke-secondary)'
+        } }))),
+    h('div', { style: { ...S.faint, display: 'flex', justifyContent: 'space-between' } },
+      h('span', null, '00'), h('span', null, '06'), h('span', null, '12'), h('span', null, '18'), h('span', null, '23')))
+}
+
+function DayDetail({ date, detail, enabled, rangeTokens, onClear }) {
+  const weekday = new Date(date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long' })
+  const sources = ((detail && detail.sources) || []).filter(x => enabled.has(x.id))
+  const models = ((detail && detail.models) || []).filter(m => enabled.has(m.src))
+  const total = sources.reduce((a, x) => a + x.tokens, 0)
+  const calls = sources.reduce((a, x) => a + x.requests, 0)
+  const cost = sources.reduce((a, x) => a + x.cost, 0)
+  const maxSrc = Math.max(1, ...sources.map(x => x.tokens))
+  const maxModel = Math.max(1, ...models.slice(0, 12).map(m => m.tokens))
+  const peak = detail && detail.peak_hour != null ? detail.peak_hour : null
+  return h('div', { style: { marginTop: 12, paddingTop: 10, borderTop: line, display: 'flex', flexDirection: 'column', gap: 12 } },
+    h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
+      h('strong', { style: { fontSize: 13 } }, weekday + ', ' + date),
+      total ? null : h('span', { style: S.faint }, 'nothing logged'),
+      h('span', { style: { flex: 1 } }),
+      onClear ? h('button', { type: 'button', onClick: onClear, title: 'Back to the latest day',
+        style: { background: 'transparent', border: 'none', color: 'var(--ui-text-quaternary)', cursor: 'pointer', fontSize: 11 } }, 'close') : null),
+    h('div', { style: { display: 'flex', gap: 18, flexWrap: 'wrap' } },
+      h(MiniStat, { label: 'Tokens', value: fmtNum(total), sub: rangeTokens ? Math.round(total / rangeTokens * 100) + '% of range' : null }),
+      h(MiniStat, { label: 'Calls', value: fmtNum(calls) }),
+      h(MiniStat, { label: 'Est. value', value: fmtMoney(cost), sub: 'list prices' }),
+      h(MiniStat, { label: 'Busiest hour', value: peak != null ? String(peak).padStart(2, '0') + ':00' : 'none',
+        sub: peak != null ? fmtNum((detail.hours || [])[peak]) + ' tokens' : null })),
+    h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 } },
+      h('div', { style: { display: 'flex', flexDirection: 'column', gap: 7 } },
+        h('div', { style: S.faint }, 'By source'),
+        ...sources.map(x => h('div', { key: x.id, style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+          h('div', { style: { display: 'flex', gap: 6, fontSize: 12 } },
+            h('span', { style: { width: 7, height: 7, borderRadius: 2, background: SRC[x.id].color, marginTop: 4 } }),
+            h('span', { style: { flex: 1 } }, x.label),
+            h('span', { style: { color: 'var(--ui-text-secondary)', fontVariantNumeric: 'tabular-nums' } }, fmtNum(x.tokens)),
+            h('span', { style: { width: 58, textAlign: 'right', ...S.faint } }, x.requests + ' calls')),
+          h(ShareBar, { value: x.tokens, max: maxSrc, color: SRC[x.id].color }),
+          h('div', { style: S.faint }, 'in ' + fmtNum(x.input) + ' | out ' + fmtNum(x.output) +
+            ' | cache read ' + fmtNum(x.cache_read) + ' | cache write ' + fmtNum(x.cache_write)))),
+        sources.length ? null : h('div', { style: S.faint }, 'No tracked source on this day.')),
+      h('div', { style: { display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 } },
+        h('div', { style: S.faint }, 'By model'),
+        models.length === 0 ? h('div', { style: S.faint }, 'No models on this day.') : models.slice(0, 12).map((m, i) =>
+          h('div', { key: m.src + m.model + i, style: { display: 'flex', flexDirection: 'column', gap: 2 } },
+            h('div', { style: { display: 'flex', gap: 6, fontSize: 12 } },
+              h('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: m.model }, m.model),
+              h('span', { style: { fontVariantNumeric: 'tabular-nums' } }, fmtNum(m.tokens)),
+              h('span', { style: { width: 54, textAlign: 'right', ...S.faint } }, m.requests + ' calls')),
+            h(ShareBar, { value: m.tokens, max: maxModel, color: SRC[m.src].color }))))),
+    detail && detail.hours ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+      h('div', { style: S.faint }, 'Through the day'),
+      h(HourStrip, { hours: detail.hours, peak })) : null)
 }
 
 function SortHead({ label, k, sort, setSort, width, align }) {
@@ -272,14 +350,16 @@ function UsageTab({ data, range, setRange, enabled, setEnabled, loading }) {
   const [sort, setSort] = useState({ key: 'tokens', dir: 'desc' })
   const [pick, setPick] = useState(null)
   const view = useUsageView(data, enabled, sort)
+  const detail = (data && data.day_detail) || {}
+  const latest = view ? [...view.days].reverse().find(d => d.tokens > 0) : null
+  const shown = pick || (latest && latest.date)
   if (!view) return h('div', { style: S.muted }, loading ? 'Reading usage from this PC...' : 'No usage data yet.')
   const toggle = id => {
     const next = new Set(enabled)
     if (next.has(id)) { if (next.size > 1) next.delete(id) } else next.add(id)
     setEnabled(next)
   }
-  const day = pick ? view.days.find(d => d.date === pick) : null
-  const dayRaw = pick ? (data.by_day || []).find(d => d.date === pick) : null
+
   return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
     h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
       ...[7, 30, 90].map(n => h(Btn, { key: n, active: range === n, onClick: () => setRange(n) }, n + ' days')),
@@ -292,13 +372,12 @@ function UsageTab({ data, range, setRange, enabled, setEnabled, loading }) {
       h(Tile, { label: 'Est. value', value: fmtMoney(view.total.cost), sub: 'at list API prices' }),
       h(Tile, { label: 'All time', value: fmtNum(data.periods.all.tokens), sub: fmtMoney(data.periods.all.cost) + ' est.' })),
     h('div', { style: S.card },
-      h('div', { style: S.faint }, 'Tokens per day (click a bar for that day)'),
-      h(StackChart, { days: view.days, selected: pick, onPick: setPick }),
-      day && dayRaw
-        ? h('div', { style: { ...S.muted, display: 'flex', gap: 14, flexWrap: 'wrap' } },
-            h('strong', null, day.date),
-            ...SOURCES.map(s => h('span', { key: s.id }, s.label + ': ' + fmtNum(dayRaw.s[s.id].tokens) + ' (' + dayRaw.s[s.id].requests + ' calls)')))
-        : null),
+      h('div', { style: S.faint }, "Tokens per day (click a bar for that day's breakdown)"),
+      h(StackChart, { days: view.days, selected: shown, onPick: d => setPick(d === shown && pick ? null : d) }),
+      shown ? h(DayDetail, {
+        date: shown, detail: detail[shown], enabled, rangeTokens: view.total.tokens,
+        onClear: pick ? () => setPick(null) : null
+      }) : null),
     h('div', { style: S.card },
       h('div', { style: S.faint }, 'By model (click a header to sort)'),
       h('div', { style: { display: 'flex', gap: 8, padding: '2px 0', borderBottom: line } },

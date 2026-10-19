@@ -303,6 +303,8 @@ def usage(days: int = 30) -> dict:
     for k in range(days):
         day = _local_day(midnight - (days - 1 - k) * 86400 + 3600)
         by_day[day] = {"date": day, "s": {s: {"tokens": 0.0, "cost": 0.0, "requests": 0} for s in SRC_LABELS}}
+    # Per-day detail for the Usage tab: which models ran, and when in the day.
+    detail: dict = {}
     models: dict = {}
     by_source = {
         s: {"id": s, "label": lbl, "requests": 0, "input": 0.0, "output": 0.0, "cache_read": 0.0,
@@ -317,6 +319,23 @@ def usage(days: int = 30) -> dict:
             c["tokens"] += total
             c["cost"] += r["cost"]
             c["requests"] += r["req"]
+            day = detail.setdefault(cell["date"], {"models": {}, "hours": [0.0] * 24, "sources": {}})
+            day["hours"][time.localtime(r["ts"]).tm_hour] += total
+            dm = day["models"].setdefault((r["src"], r["model"]), {
+                "model": r["model"], "src": r["src"], "tokens": 0.0, "requests": 0, "cost": 0.0})
+            dm["tokens"] += total
+            dm["requests"] += r["req"]
+            dm["cost"] += r["cost"]
+            ds = day["sources"].setdefault(r["src"], {
+                "id": r["src"], "label": SRC_LABELS[r["src"]], "tokens": 0.0, "requests": 0, "cost": 0.0,
+                "input": 0.0, "output": 0.0, "cache_read": 0.0, "cache_write": 0.0})
+            ds["tokens"] += total
+            ds["requests"] += r["req"]
+            ds["cost"] += r["cost"]
+            ds["input"] += r["i"]
+            ds["output"] += r["o"]
+            ds["cache_read"] += r["cr"]
+            ds["cache_write"] += r["cw"]
         m = models.setdefault((r["src"], r["model"]), {
             "model": r["model"], "src": r["src"], "provider": r["provider"],
             "requests": 0, "tokens": 0.0, "cost": 0.0})
@@ -351,6 +370,17 @@ def usage(days: int = 30) -> dict:
             "all": _period(records, 0),
         },
         "by_day": list(by_day.values()),
+        "day_detail": {
+            date: {
+                "date": date,
+                "models": sorted(d["models"].values(), key=lambda m: m["tokens"], reverse=True),
+                "sources": sorted(d["sources"].values(), key=lambda x: x["tokens"], reverse=True),
+                "hours": [round(v) for v in d["hours"]],
+                "peak_hour": max(range(24), key=lambda i: d["hours"][i]) if any(d["hours"]) else None,
+                "tokens": round(sum(v for v in d["hours"])),
+            }
+            for date, d in detail.items()
+        },
         "by_model": sorted(models.values(), key=lambda x: x["tokens"], reverse=True)[:40],
         "by_source": list(by_source.values()),
         "coverage": coverage,
