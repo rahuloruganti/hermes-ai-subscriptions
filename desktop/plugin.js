@@ -94,6 +94,7 @@ function age(stamp, stale) {
   return { text: 'cached, ' + Math.round(mins / 1440) + 'd old', live: false }
 }
 
+const fmtTps = v => (v == null || !isFinite(v) ? null : (v >= 100 ? Math.round(v) : Math.round(v * 10) / 10) + ' t/s')
 const tone = used => (used == null ? 'var(--ui-stroke-secondary)' : used >= 85 ? 'var(--ui-red)' : used >= 60 ? 'var(--ui-yellow)' : 'var(--ui-green)')
 
 // ── Data merge ──────────────────────────────────────────────────────────────
@@ -244,10 +245,19 @@ function useUsageView(data, enabled, sort) {
       return { date: d.date, tokens, cost, requests, parts }
     })
     const total = days.reduce((a, d) => ({ tokens: a.tokens + d.tokens, cost: a.cost + d.cost, requests: a.requests + d.requests }), { tokens: 0, cost: 0, requests: 0 })
-    const models = (data.by_model || []).filter(m => on(m.src)).slice()
+    const models = (data.by_model || []).filter(m => on(m.src))
+      .map(m => ({ ...m, tps: m.speed && m.speed.tps != null ? m.speed.tps : null }))
     const dir = sort.dir === 'asc' ? 1 : -1
-    models.sort((a, b) => (typeof a[sort.key] === 'string' ? a[sort.key].localeCompare(b[sort.key]) : a[sort.key] - b[sort.key]) * dir)
-    return { days, total, models }
+    models.sort((a, b) => {
+      const av = a[sort.key], bv = b[sort.key]
+      if (typeof av === 'string' || typeof bv === 'string') return String(av).localeCompare(String(bv)) * dir
+      // untimed rows sort last in both directions
+      if (av == null && bv == null) return 0
+      if (av == null) return 1
+      if (bv == null) return -1
+      return (av - bv) * dir
+    })
+    return { days, total, models, speed: data.speed || null }
   }, [data, enabled, sort])
 }
 
@@ -313,6 +323,8 @@ function DayDetail({ date, detail, enabled, rangeTokens, onClear }) {
       h(MiniStat, { label: 'Tokens', value: fmtNum(total), sub: rangeTokens ? Math.round(total / rangeTokens * 100) + '% of range' : null }),
       h(MiniStat, { label: 'Calls', value: fmtNum(calls) }),
       h(MiniStat, { label: 'Est. value', value: fmtMoney(cost), sub: 'list prices' }),
+      h(MiniStat, { label: 'Avg speed', value: fmtTps(detail && detail.speed && detail.speed.tps) || 'n/a',
+        sub: detail && detail.speed && detail.speed.calls ? fmtNum(detail.speed.calls) + ' timed calls' : 'untimed' }),
       h(MiniStat, { label: 'Busiest hour', value: peak != null ? String(peak).padStart(2, '0') + ':00' : 'none',
         sub: peak != null ? fmtNum((detail.hours || [])[peak]) + ' tokens' : null })),
     h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 } },
@@ -335,6 +347,8 @@ function DayDetail({ date, detail, enabled, rangeTokens, onClear }) {
             h('div', { style: { display: 'flex', gap: 6, fontSize: 12 } },
               h('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: m.model }, m.model),
               h('span', { style: { fontVariantNumeric: 'tabular-nums' } }, fmtNum(m.tokens)),
+              h('span', { title: m.speed && m.speed.calls ? 'measured over ' + m.speed.calls + ' calls' : 'no timing logged',
+                style: { width: 52, textAlign: 'right', color: m.speed && m.speed.tps != null ? 'var(--ui-text-secondary)' : 'var(--ui-text-quaternary)', fontVariantNumeric: 'tabular-nums' } }, fmtTps(m.speed && m.speed.tps) || '-'),
               h('span', { style: { width: 54, textAlign: 'right', ...S.faint } }, m.requests + ' calls')),
             h(ShareBar, { value: m.tokens, max: maxModel, color: SRC[m.src].color }))))),
     detail && detail.hours ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
@@ -374,7 +388,9 @@ function UsageTab({ data, range, setRange, enabled, setEnabled, loading }) {
       h(Tile, { label: 'Tokens, last ' + range + 'd', value: fmtNum(view.total.tokens), sub: 'input, output and cache' }),
       h(Tile, { label: 'API calls', value: fmtNum(view.total.requests), sub: 'in this range' }),
       h(Tile, { label: 'Est. value', value: fmtMoney(view.total.cost), sub: 'at list API prices' }),
-      h(Tile, { label: 'All time', value: fmtNum(data.periods.all.tokens), sub: fmtMoney(data.periods.all.cost) + ' est.' })),
+      h(Tile, { label: 'All time', value: fmtNum(data.periods.all.tokens), sub: fmtMoney(data.periods.all.cost) + ' est.' }),
+      h(Tile, { label: 'Avg speed', value: fmtTps(view.speed && view.speed.tps) || 'n/a',
+        sub: view.speed && view.speed.calls ? 'over ' + fmtNum(view.speed.calls) + ' timed calls' : 'no timed calls yet' })),
     h('div', { style: S.card },
       h('div', { style: S.faint }, "Tokens per day (click a bar for that day's breakdown)"),
       h(StackChart, { days: view.days, selected: shown, onPick: d => setPick(d === shown && pick ? null : d) }),
@@ -389,6 +405,7 @@ function UsageTab({ data, range, setRange, enabled, setEnabled, loading }) {
         h('div', { style: { width: 86, fontSize: 11, fontWeight: 600, color: 'var(--ui-text-quaternary)' } }, 'Source'),
         h(SortHead, { label: 'Calls', k: 'requests', sort, setSort, width: 58, align: 'right' }),
         h(SortHead, { label: 'Tokens', k: 'tokens', sort, setSort, width: 70, align: 'right' }),
+        h(SortHead, { label: 't/s', k: 'tps', sort, setSort, width: 56, align: 'right' }),
         h(SortHead, { label: 'Est. $', k: 'cost', sort, setSort, width: 64, align: 'right' })),
       view.models.length === 0 ? h('div', { style: S.faint }, 'Nothing in this range.') : view.models.slice(0, 25).map((m, i) =>
         h('div', { key: m.src + m.model + i, style: { display: 'flex', gap: 8, alignItems: 'center', padding: '2px 0', fontSize: 12 } },
@@ -396,6 +413,8 @@ function UsageTab({ data, range, setRange, enabled, setEnabled, loading }) {
           h('div', { style: { width: 86, fontSize: 11, color: 'var(--ui-text-secondary)' } }, h('span', { style: { display: 'inline-block', width: 7, height: 7, borderRadius: 2, background: SRC[m.src].color, marginRight: 5 } }), SRC[m.src].label),
           h('div', { style: { width: 58, textAlign: 'right' } }, fmtNum(m.requests)),
           h('div', { style: { width: 70, textAlign: 'right' } }, fmtNum(m.tokens)),
+          h('div', { title: m.speed && m.speed.calls ? 'measured over ' + m.speed.calls + ' calls (' + fmtNum(m.speed.tokens) + ' output tokens in ' + fmtNum(m.speed.seconds) + 's)' : 'no timing logged for this model',
+            style: { width: 56, textAlign: 'right', color: m.tps == null ? 'var(--ui-text-quaternary)' : 'var(--ui-text-secondary)', fontVariantNumeric: 'tabular-nums' } }, fmtTps(m.tps) || '-'),
           h('div', { style: { width: 64, textAlign: 'right', color: 'var(--ui-text-secondary)' } }, fmtMoney(m.cost))))),
     h('div', { style: S.card },
       h('div', { style: S.faint }, 'Token mix by source, last ' + range + ' days'),
@@ -407,7 +426,7 @@ function UsageTab({ data, range, setRange, enabled, setEnabled, loading }) {
           s.reasoning ? h('span', { style: S.faint }, '(' + fmtNum(s.reasoning) + ' reasoning, included in output)') : null)
       })),
     h('div', { style: S.faint },
-      'Counts come from local logs: ' + SOURCES.map(s => {
+      'Speed is output tokens over the model time each tool records: Grok CLI logs every call, Claude Code logs a turn summary, Hermes keeps no per-call timing, so its models show - (its live t/s is in the status bar). Counts come from local logs: ' + SOURCES.map(s => {
         const c = data.coverage[s.id]
         return s.label + ' ' + (c && c.first ? c.first.slice(0, 10) + ' to ' + c.last.slice(0, 10) : 'none')
       }).join('; ') + '. Not tracked: ' + (data.not_tracked || []).map(n => n.name + ' (' + n.why + ')').join('; ') + '. Claude and Grok dollar figures are list-price estimates; subscriptions are not billed per token.'))

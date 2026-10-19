@@ -282,6 +282,124 @@ def _local_day(ts: float) -> str:
     return time.strftime("%Y-%m-%d", time.localtime(ts))
 
 
+# ── Generation speed (output tokens per second of measured model time) ──────
+# Only sources that record timing contribute. Hermes' state.db has no per-call
+# duration, so its models stay untimed rather than estimated.
+
+
+def _speed_sum(samples: list) -> dict:
+    if not samples:
+        return {"tps": None, "calls": 0, "tokens": 0, "seconds": 0.0}
+    tok = sum(s["out"] for s in samples)
+    sec = sum(s["sec"] for s in samples)
+    return {"tps": round(tok / sec, 1) if sec > 0 else None, "calls": len(samples),
+            "tokens": round(tok), "seconds": round(sec, 1)}
+
+
+def _speed_samples_claude() -> list:
+    """Claude Code writes a cumulative ``cost-state`` line per turn end; the
+    difference between two of them is that turn's API time and output tokens.
+    Slices where more than one model produced output can't be attributed, so
+    they are left out."""
+    root = USER / ".claude" / "projects"
+    if not root.is_dir():
+        return []
+    out: list = []
+    for path in root.rglob("*.jsonl"):
+        try:
+            handle = open(path, encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with handle:
+            prev = None
+            last_ts = None
+            for line in handle:
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                stamp = _ts(obj.get("timestamp"))
+                if stamp:
+                    last_ts = stamp
+                if obj.get("type") != "cost-state":
+                    continue
+                usage = obj.get("modelUsage") or {}
+                if not isinstance(usage, dict):
+                    continue
+                # cost-state carries no timestamp of its own; it lands at the end of
+                # the turn, so the turn's last known time is the honest one to use.
+                cur = (
+                    _ts(obj.get("timestamp")) or _ts(obj.get("startTime")) or last_ts,
+                    _num(obj.get("totalAPIDurationWithoutRetries")),
+                    {m: _num((v or {}).get("outputTokens")) for m, v in usage.items() if isinstance(v, dict)},
+                )
+                if prev and prev[0] and prev[2]:
+                    spent = cur[1] - prev[1]
+                    gained = {m: cur[2].get(m, 0.0) - prev[2].get(m, 0.0) for m in cur[2]}
+                    gained = {m: v for m, v in gained.items() if v > 0}
+                    if 0 < spent < 30 * 60 * 1000 and len(gained) == 1:
+                        model, tokens = next(iter(gained.items()))
+                        if tokens > 0 and not str(model).startswith("<"):
+                            out.append({"src": "claude", "ts": cur[0], "model": model,
+                                        "out": tokens, "sec": spent / 1000.0})
+                prev = cur
+    return out
+
+
+def _speed_samples_grok() -> list:
+    log = USER / ".grok" / "logs" / "unified.jsonl"
+    if not log.is_file():
+        return []
+    models: dict = {}
+    for summary in (USER / ".grok" / "sessions").glob("*/*/summary.json"):
+        data = _json(summary)
+        if isinstance(data, dict):
+            info = data.get("info") or {}
+            if info.get("id") and data.get("current_model_id"):
+                models[info["id"]] = data["current_model_id"]
+    out: list = []
+    with open(log, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if "inference_done" not in line:
+                continue
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if obj.get("msg") != "shell.turn.inference_done":
+                continue
+            ctx = obj.get("ctx") or {}
+            ts = _ts(obj.get("ts"))
+            spent, tokens = _num(ctx.get("model_elapsed_ms")), _num(ctx.get("completion_tokens"))
+            if ts is None or spent <= 0 or tokens <= 0:
+                continue
+            out.append({"src": "grok", "ts": ts, "model": models.get(obj.get("sid")) or "grok-4.7",
+                        "out": tokens, "sec": spent / 1000.0})
+    return out
+
+
+def _speed_samples() -> list:
+    return _speed_samples_claude() + _speed_samples_grok()
+
+
+def _day_detail(detail: dict, by_model: dict, by_day: dict) -> dict:
+    out: dict = {}
+    for date, d in detail.items():
+        rows = sorted(d["models"].values(), key=lambda m: m["tokens"], reverse=True)
+        for row in rows:
+            row["speed"] = _speed_sum(by_model.get((date, row["src"], row["model"]), []))
+        out[date] = {
+            "date": date,
+            "models": rows,
+            "sources": sorted(d["sources"].values(), key=lambda x: x["tokens"], reverse=True),
+            "hours": [round(v) for v in d["hours"]],
+            "peak_hour": max(range(24), key=lambda i: d["hours"][i]) if any(d["hours"]) else None,
+            "tokens": round(sum(v for v in d["hours"])),
+            "speed": _speed_sum(by_day.get(date, [])),
+        }
+    return out
+
+
 def _period(records: list, since: float) -> dict:
     sel = [r for r in records if r["ts"] >= since]
     return {
@@ -298,6 +416,16 @@ def usage(days: int = 30) -> dict:
     midnight = time.mktime(time.localtime(now)[:3] + (0, 0, 0, 0, 0, -1))
     cutoff = midnight - (days - 1) * 86400
     window = [r for r in records if r["ts"] >= cutoff]
+
+    samples = [s for s in _speed_samples() if s["ts"] >= cutoff]
+    speed_model: dict = {}
+    speed_day_model: dict = {}
+    speed_day: dict = {}
+    for sample in samples:
+        speed_model.setdefault((sample["src"], sample["model"]), []).append(sample)
+        day = _local_day(sample["ts"])
+        speed_day_model.setdefault((day, sample["src"], sample["model"]), []).append(sample)
+        speed_day.setdefault(day, []).append(sample)
 
     by_day: dict = {}
     for k in range(days):
@@ -370,18 +498,12 @@ def usage(days: int = 30) -> dict:
             "all": _period(records, 0),
         },
         "by_day": list(by_day.values()),
-        "day_detail": {
-            date: {
-                "date": date,
-                "models": sorted(d["models"].values(), key=lambda m: m["tokens"], reverse=True),
-                "sources": sorted(d["sources"].values(), key=lambda x: x["tokens"], reverse=True),
-                "hours": [round(v) for v in d["hours"]],
-                "peak_hour": max(range(24), key=lambda i: d["hours"][i]) if any(d["hours"]) else None,
-                "tokens": round(sum(v for v in d["hours"])),
-            }
-            for date, d in detail.items()
-        },
-        "by_model": sorted(models.values(), key=lambda x: x["tokens"], reverse=True)[:40],
+        "day_detail": _day_detail(detail, speed_day_model, speed_day),
+        "by_model": [
+            dict(row, speed=_speed_sum(speed_model.get((row["src"], row["model"]), [])))
+            for row in sorted(models.values(), key=lambda x: x["tokens"], reverse=True)[:40]
+        ],
+        "speed": _speed_sum(samples),
         "by_source": list(by_source.values()),
         "coverage": coverage,
         "not_tracked": [
