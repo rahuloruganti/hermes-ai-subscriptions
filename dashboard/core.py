@@ -303,8 +303,10 @@ def _local_day(ts: float) -> str:
 
 
 # ── Generation speed (output tokens per second of measured model time) ──────
-# Only sources that record timing contribute. Hermes' state.db has no per-call
-# duration, so its models stay untimed rather than estimated.
+# Only sources that record timing contribute. Grok logs every call, Claude Code
+# logs a turn summary, and Hermes is timed by this plugin's own post_api_request
+# hook (plugin-data/ai-subscriptions/api_speed.jsonl). A provider with no timing
+# is left untimed rather than estimated.
 
 
 def _speed_sum(samples: list) -> dict:
@@ -398,8 +400,38 @@ def _speed_samples_grok() -> list:
     return out
 
 
+def _speed_samples_hermes() -> list:
+    """Hermes' own calls, timed by this plugin's ``post_api_request`` hook.
+
+    The hook is what makes these exist: state.db records tokens but no duration,
+    so the file fills up from the first call after Hermes restarts.
+    """
+    path = home() / "plugin-data" / "ai-subscriptions" / "api_speed.jsonl"
+    if not path.is_file():
+        return []
+    out: list = []
+    try:
+        handle = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    with handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            ts, spent, tokens = _num(row.get("ts")), _num(row.get("sec")), _num(row.get("out"))
+            model = str(row.get("model") or "")
+            if ts <= 0 or spent <= 0 or tokens <= 0 or not model:
+                continue
+            out.append({"src": "hermes", "ts": ts, "model": model, "out": tokens, "sec": spent})
+    return out
+
+
 def _speed_samples() -> list:
-    return _speed_samples_claude() + _speed_samples_grok()
+    return _speed_samples_claude() + _speed_samples_grok() + _speed_samples_hermes()
 
 
 def _day_detail(detail: dict, by_model: dict, by_day: dict) -> dict:

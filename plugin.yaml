@@ -1,10 +1,12 @@
-name: ai-subscriptions
-version: 0.1.0
-description: "Full edition: your AI subscriptions, live quota for Claude, Grok, Nous and Copilot, and token usage across Hermes, Claude Code and the Grok CLI, as a page, tabs and a status-bar picker in Hermes Desktop."
-author: rahuloruganti
-manifest_version: 1
-kind: standalone
-provides_tools: []
-provides_hooks: []
-provides_middleware: []
-requires_env: []
+{
+  "name": "ai-subscriptions",
+  "version": "0.1.0",
+  "description": "All your AI subscriptions (plans, quota windows, login sources) plus local Hermes usage stats.",
+  "author": "Rahul",
+  "manifest_version": 1,
+  "kind": "standalone",
+  "provides_tools": [],
+  "provides_hooks": ["post_api_request"],
+  "provides_middleware": [],
+  "requires_env": []
+}

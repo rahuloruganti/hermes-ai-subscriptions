@@ -426,7 +426,7 @@ function UsageTab({ data, range, setRange, enabled, setEnabled, loading }) {
           s.reasoning ? h('span', { style: S.faint }, '(' + fmtNum(s.reasoning) + ' reasoning, included in output)') : null)
       })),
     h('div', { style: S.faint },
-      'Speed is output tokens over the model time each tool records: Grok CLI logs every call, Claude Code logs a turn summary, Hermes keeps no per-call timing, so its models show - (its live t/s is in the status bar). Counts come from local logs: ' + SOURCES.map(s => {
+      'Speed is output tokens over the model time each tool records: Grok CLI logs every call, Claude Code logs a turn summary, and Hermes calls are timed by this plugin\'s own hook, which starts recording from the first call after a restart. Counts come from local logs: ' + SOURCES.map(s => {
         const c = data.coverage[s.id]
         return s.label + ' ' + (c && c.first ? c.first.slice(0, 10) + ' to ' + c.last.slice(0, 10) : 'none')
       }).join('; ') + '. Not tracked: ' + (data.not_tracked || []).map(n => n.name + ' (' + n.why + ')').join('; ') + '. Claude and Grok dollar figures are list-price estimates; subscriptions are not billed per token.'))

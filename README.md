@@ -39,6 +39,7 @@ Everything is read-only. Tokens are used for outbound usage calls only and are n
 - `~/.claude.json`, `~/.grok/auth.json`: your account email and plan label.
 - `gh auth token`: the GitHub CLI token for Copilot's premium request count.
 - Token counts only, from `state.db`, `~/.claude/projects`, `~/.grok/logs`, and `~/.tokentracker/cache/pricing.json`.
+- One observer hook, `post_api_request`: after each Hermes model call it appends one line to `$HERMES_HOME/plugin-data/ai-subscriptions/api_speed.jsonl` holding the end time, model, output tokens, duration and time to first chunk. Numbers only. This is what lets the dashboard show a measured tokens/second rate for Hermes' own models; it starts from the first call after a restart and is not backfilled. The file rotates at 5 MB.
 - Calls: `api.anthropic.com/api/oauth/usage` (paced to one a minute, rate limits honoured across restarts), `cli-chat-proxy.grok.com/v1/billing`, the Nous portal billing endpoint, `api.github.com/copilot_internal/user`.
 
 The last good reading of each provider is saved to `<HERMES_HOME>/plugin-data/ai-subscriptions/state.json` and shown labelled with its age, never as live.
