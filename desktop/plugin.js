@@ -263,15 +263,23 @@ function useUsageView(data, enabled, sort) {
 
 function StackChart({ days, selected, onPick }) {
   const max = Math.max(1, ...days.map(d => d.tokens))
-  return h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: 2, height: 110 } }, days.map(d =>
-    h('div', {
-      key: d.date, role: 'button', onClick: () => onPick(selected === d.date ? null : d.date),
+  return h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: 2, height: 110 } }, days.map(d => {
+    const on = selected === d.date
+    return h('div', {
+      key: d.date, role: 'button', onClick: () => onPick(on ? null : d.date),
       title: d.date + ': ' + fmtNum(d.tokens) + ' tokens, ' + fmtMoney(d.cost) + ' est.',
-      style: { flex: 1, minWidth: 3, height: '100%', display: 'flex', flexDirection: 'column-reverse', cursor: 'pointer', outline: selected === d.date ? '1px solid var(--ui-text-secondary)' : 'none', borderRadius: 2 }
+      style: {
+        flex: 1, minWidth: 3, height: '100%', display: 'flex', flexDirection: 'column-reverse',
+        cursor: 'pointer', borderRadius: 4, outlineOffset: 2, transition: 'background 120ms ease',
+        // Every bar keeps full colour; the picked one gets an accent ring instead of dimming the rest.
+        outline: on ? '1.5px solid var(--ui-accent)' : 'none',
+        background: on ? 'color-mix(in oklab, var(--ui-accent) 14%, transparent)' : 'transparent'
+      }
     },
       d.tokens === 0
         ? h('div', { style: { height: 3, background: 'var(--ui-stroke-secondary)', borderRadius: 2, opacity: 0.6 } })
-        : d.parts.filter(p => p.tokens > 0).map(p => h('div', { key: p.id, style: { height: (p.tokens / max * 100).toFixed(2) + '%', minHeight: 2, background: SRC[p.id].color, opacity: selected && selected !== d.date ? 0.45 : 1 } })))))
+        : d.parts.filter(p => p.tokens > 0).map(p => h('div', { key: p.id, style: { height: (p.tokens / max * 100).toFixed(2) + '%', minHeight: 2, background: SRC[p.id].color } })))
+  }))
 }
 
 function MiniStat({ label, value, sub }) {
