@@ -463,7 +463,10 @@ function OverviewTab({ plans, data, setTab }) {
 // ── Page ────────────────────────────────────────────────────────────────────
 
 function useSubData(range) {
-  const liveQ = useQuery({ queryKey: [PLUGIN_ID, 'plans'], queryFn: () => loadPlans(true), refetchInterval: LIVE_MS, retry: 1 })
+  // Poll the cached usage windows only. Explicit refresh (model.options {refresh: true})
+  // clears Hermes' catalog cache and contacts every provider, so the page must never
+  // do that on a timer; only the Refresh button does.
+  const liveQ = useQuery({ queryKey: [PLUGIN_ID, 'plans'], queryFn: () => loadPlans(false), refetchInterval: LIVE_MS, retry: 1 })
   const usageQ = useQuery({ queryKey: [PLUGIN_ID, 'usage', range], queryFn: () => apiCtx.rest('/usage?days=' + range), refetchInterval: USAGE_MS, retry: 1 })
   const lastUsage = useRef(null)
   if (usageQ.data) lastUsage.current = usageQ.data
