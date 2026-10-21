@@ -163,38 +163,69 @@ def _rec(src, ts, model, provider, req, i, o, cr, cw, rs, cost, est):
 
 
 def _scan_hermes() -> list:
+    """Hermes usage, spread over the days each session was actually active.
+
+    state.db keeps one aggregate row per (session, model) with ``first_seen`` and
+    ``last_seen``, not a row per call. Counting a whole row on ``last_seen`` made
+    a session left open for days look like one day's usage: a single 4-day chat
+    reported 40M tokens "today" when almost all of it was earlier. Rows that span
+    days are therefore split by the number of messages the session logged on each
+    day, which tracks turns (and so cache reads) closely enough to be honest.
+    """
     db = home() / "state.db"
     if not db.is_file():
         return []
     out: list = []
     con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
     try:
+        weights: dict = {}
+        last_message: dict = {}
+        for sid, day, count, stamp in con.execute(
+            """SELECT session_id, date(timestamp, 'unixepoch', 'localtime'), COUNT(*), MAX(timestamp)
+               FROM messages WHERE timestamp IS NOT NULL GROUP BY 1, 2"""
+        ):
+            weights.setdefault(sid, {})[day] = _num(count)
+            last_message[(sid, day)] = _num(stamp)
+        now = time.time()
+
+        def emit(sid, model, provider, calls, i, o, cr, cw, rs, cost, first, last):
+            start_day, end_day = _local_day(first), _local_day(last)
+            per_day = (weights.get(sid) or {}) if start_day != end_day else {}
+            days = sorted(d for d in per_day if start_day <= d <= end_day)
+            total = sum(per_day[d] for d in days) if days else 0.0
+            if not days or total <= 0:
+                out.append(_rec("hermes", min(last, now), model, provider, calls, i, o, cr, cw, rs, cost, False))
+                return
+            for day in days:
+                share = per_day[day] / total
+                stamp = min(last_message.get((sid, day)) or last, now)
+                out.append(_rec("hermes", stamp, model, provider, int(round(calls * share)),
+                                i * share, o * share, cr * share, cw * share, rs * share, cost * share, False))
+
         have = set()
         for r in con.execute(
             """SELECT session_id, model, billing_provider, api_call_count, input_tokens,
                       output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
-                      estimated_cost_usd, actual_cost_usd, last_seen FROM session_model_usage"""
+                      estimated_cost_usd, actual_cost_usd, last_seen, first_seen FROM session_model_usage"""
         ):
             have.add(r[0])
-            ts = _ts(r[11])
-            if ts is None:
+            last = _ts(r[11])
+            if last is None:
                 continue
-            cost = _num(r[10]) or _num(r[9])
-            out.append(_rec("hermes", ts, r[1], r[2], int(_num(r[3])), _num(r[4]), _num(r[5]),
-                            _num(r[6]), _num(r[7]), _num(r[8]), cost, False))
+            emit(r[0], r[1], r[2], int(_num(r[3])), _num(r[4]), _num(r[5]), _num(r[6]), _num(r[7]),
+                 _num(r[8]), _num(r[10]) or _num(r[9]), _ts(r[12]) or last, last)
         for r in con.execute(
             """SELECT id, model, billing_provider, api_call_count, input_tokens, output_tokens,
                       cache_read_tokens, cache_write_tokens, reasoning_tokens,
-                      estimated_cost_usd, actual_cost_usd, last_activity_at FROM sessions"""
+                      estimated_cost_usd, actual_cost_usd, last_activity_at, started_at FROM sessions"""
         ):
             if r[0] in have:
                 continue
-            ts = _ts(r[11])
-            if ts is None or not (_num(r[4]) or _num(r[5])):
+            last = _ts(r[11])
+            if last is None or not (_num(r[4]) or _num(r[5])):
                 continue
-            cost = _num(r[10]) or _num(r[9])
-            out.append(_rec("hermes", ts, r[1], r[2], int(_num(r[3])), _num(r[4]), _num(r[5]),
-                            _num(r[6]), _num(r[7]), _num(r[8]), cost, False))
+            emit(r[0], r[1], r[2], int(_num(r[3])), _num(r[4]), _num(r[5]), _num(r[6]), _num(r[7]),
+                 _num(r[8]), _num(r[10]) or _num(r[9]), _ts(r[12]) or last, last)
     finally:
         con.close()
     return out
