@@ -467,6 +467,14 @@ function useSubData(range) {
   // clears Hermes' catalog cache and contacts every provider, so the page must never
   // do that on a timer; only the Refresh button does.
   const liveQ = useQuery({ queryKey: [PLUGIN_ID, 'plans'], queryFn: () => loadPlans(false), refetchInterval: LIVE_MS, retry: 1 })
+  // The first read is usually empty: Hermes fills its usage cache in background threads
+  // right after it, so read once more shortly after mount instead of leaving the cards
+  // blank until the next 2-minute tick.
+  const refetchPlans = liveQ.refetch
+  useEffect(() => {
+    const timer = setTimeout(() => { refetchPlans() }, 8000)
+    return () => clearTimeout(timer)
+  }, [refetchPlans])
   const usageQ = useQuery({ queryKey: [PLUGIN_ID, 'usage', range], queryFn: () => apiCtx.rest('/usage?days=' + range), refetchInterval: USAGE_MS, retry: 1 })
   const lastUsage = useRef(null)
   if (usageQ.data) lastUsage.current = usageQ.data
