@@ -354,7 +354,7 @@ def _speed_samples_claude() -> list:
         return []
     # Resumed sessions replay earlier history into a new file, so the same call can sit
     # in up to a dozen files, and the replays are re-stamped (about half of repeated
-    # calls disagree on duration). Key on (message id, request id) like the token scan,
+    # calls disagree on duration). Key on the message id like the token scan,
     # gather every copy, and below decide which calls are trustworthy.
     best: dict = {}
     for path in root.rglob("*.jsonl"):
@@ -368,7 +368,9 @@ def _speed_samples_claude() -> list:
 
             def flush():
                 nonlocal cur
-                if cur and cur["start"] and cur["start"] <= cur["first"]:
+                # An unfinished call (no stop_reason) still carries the message_start placeholder
+                # for output_tokens, so its rate would be meaningless. Anthropic documents this.
+                if cur and cur["done"] and cur["start"] and cur["start"] <= cur["first"]:
                     spent = cur["last"] - cur["start"]
                     if 0 < spent <= 600 and cur["out"] >= 20:
                         best.setdefault(cur["key"], []).append(
@@ -404,10 +406,11 @@ def _speed_samples_claude() -> list:
                 if cur and cur["key"] == key:
                     cur["last"] = stamp
                     cur["out"] = max(cur["out"], tokens)
+                    cur["done"] = cur["done"] or bool(msg.get("stop_reason"))
                 else:
                     flush()
                     cur = {"key": key, "model": model, "start": last_user, "first": stamp,
-                           "last": stamp, "out": tokens}
+                           "last": stamp, "out": tokens, "done": bool(msg.get("stop_reason"))}
             flush()
     out: list = []
     for copies in best.values():
