@@ -244,7 +244,9 @@ def _scan_claude() -> list:
                 cw = _num(u.get("cache_creation_input_tokens"))
                 details = u.get("output_tokens_details")
                 rs = _num(details.get("thinking_tokens")) if isinstance(details, dict) else 0.0
-                key = (msg.get("id") or obj.get("uuid"), obj.get("requestId"))
+                # message.id is unique per response; some Anthropic-compatible providers (and Claude Code's
+                # sub-agent paths) omit requestId, which would defeat a (id, requestId) key.
+                key = msg.get("id") or obj.get("uuid")
                 prev = best.get(key)
                 # One API call is logged once per content block; keep the final (largest) one.
                 if prev is None or o > prev["o"]:
@@ -395,7 +397,9 @@ def _speed_samples_claude() -> list:
                 model = str(msg.get("model") or "")
                 if not model or model.startswith("<"):
                     continue
-                key = (msg.get("id") or obj.get("uuid"), obj.get("requestId"))
+                # message.id is unique per response; some Anthropic-compatible providers (and Claude Code's
+                # sub-agent paths) omit requestId, which would defeat a (id, requestId) key.
+                key = msg.get("id") or obj.get("uuid")
                 tokens = _num(msg["usage"].get("output_tokens"))
                 if cur and cur["key"] == key:
                     cur["last"] = stamp
