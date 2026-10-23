@@ -318,62 +318,104 @@ def _local_day(ts: float) -> str:
 # duration, so its models stay untimed rather than estimated.
 
 
+MIN_SPEED_CALLS = 3
+
+
 def _speed_sum(samples: list) -> dict:
     if not samples:
         return {"tps": None, "calls": 0, "tokens": 0, "seconds": 0.0}
     tok = sum(s["out"] for s in samples)
     sec = sum(s["sec"] for s in samples)
-    return {"tps": round(tok / sec, 1) if sec > 0 else None, "calls": len(samples),
+    # One or two calls is noise (a single 38-token call once read 3 t/s), so a rate
+    # is only reported from MIN_SPEED_CALLS timed calls; the counts are still returned.
+    ok = sec > 0 and len(samples) >= MIN_SPEED_CALLS
+    return {"tps": round(tok / sec, 1) if ok else None, "calls": len(samples),
             "tokens": round(tok), "seconds": round(sec, 1)}
 
 
 def _speed_samples_claude() -> list:
-    """Claude Code writes a cumulative ``cost-state`` line per turn end; the
-    difference between two of them is that turn's API time and output tokens.
-    Slices where more than one model produced output can't be attributed, so
-    they are left out."""
+    """Time every Claude Code API call from its own session log.
+
+    A call is logged once per content block (thinking, text, tool_use), each with a
+    timestamp, and the request goes out right after the preceding ``user`` record
+    (a tool result or the prompt). So a call took ``last block - preceding user
+    record`` seconds and produced the largest ``output_tokens`` its blocks report.
+    That is the same definition the other sources use (output tokens over the time
+    from request to end of stream, first-token wait included).
+
+    Checked against Claude Code's own ``cost-state`` API durations: the rate agrees
+    (about 96 vs 102 t/s). Calls under 20 output tokens are skipped, as they are
+    mostly time-to-first-token, and so are gaps over 10 minutes.
+    """
     root = USER / ".claude" / "projects"
     if not root.is_dir():
         return []
-    out: list = []
+    # Resumed sessions replay earlier history into a new file, so the same call can sit
+    # in up to a dozen files, and the replays are re-stamped (about half of repeated
+    # calls disagree on duration). Key on (message id, request id) like the token scan,
+    # gather every copy, and below decide which calls are trustworthy.
+    best: dict = {}
     for path in root.rglob("*.jsonl"):
         try:
             handle = open(path, encoding="utf-8", errors="replace")
         except OSError:
             continue
         with handle:
-            prev = None
-            last_ts = None
+            last_user = None
+            cur = None
+
+            def flush():
+                nonlocal cur
+                if cur and cur["start"] and cur["start"] <= cur["first"]:
+                    spent = cur["last"] - cur["start"]
+                    if 0 < spent <= 600 and cur["out"] >= 20:
+                        best.setdefault(cur["key"], []).append(
+                            {"src": "claude", "ts": cur["last"], "model": cur["model"],
+                             "out": cur["out"], "sec": spent})
+                cur = None
+
             for line in handle:
+                if '"type":"user"' not in line and '"usage"' not in line:
+                    continue
                 try:
                     obj = json.loads(line)
                 except ValueError:
                     continue
                 stamp = _ts(obj.get("timestamp"))
-                if stamp:
-                    last_ts = stamp
-                if obj.get("type") != "cost-state":
+                if not stamp:
                     continue
-                usage = obj.get("modelUsage") or {}
-                if not isinstance(usage, dict):
+                kind = obj.get("type")
+                if kind == "user":
+                    flush()
+                    last_user = stamp
                     continue
-                # cost-state carries no timestamp of its own; it lands at the end of
-                # the turn, so the turn's last known time is the honest one to use.
-                cur = (
-                    _ts(obj.get("timestamp")) or _ts(obj.get("startTime")) or last_ts,
-                    _num(obj.get("totalAPIDurationWithoutRetries")),
-                    {m: _num((v or {}).get("outputTokens")) for m, v in usage.items() if isinstance(v, dict)},
-                )
-                if prev and prev[0] and prev[2]:
-                    spent = cur[1] - prev[1]
-                    gained = {m: cur[2].get(m, 0.0) - prev[2].get(m, 0.0) for m in cur[2]}
-                    gained = {m: v for m, v in gained.items() if v > 0}
-                    if 0 < spent < 30 * 60 * 1000 and len(gained) == 1:
-                        model, tokens = next(iter(gained.items()))
-                        if tokens > 0 and not str(model).startswith("<"):
-                            out.append({"src": "claude", "ts": cur[0], "model": model,
-                                        "out": tokens, "sec": spent / 1000.0})
-                prev = cur
+                msg = obj.get("message")
+                if kind != "assistant" or not isinstance(msg, dict) or not isinstance(msg.get("usage"), dict):
+                    continue
+                model = str(msg.get("model") or "")
+                if not model or model.startswith("<"):
+                    continue
+                key = (msg.get("id") or obj.get("uuid"), obj.get("requestId"))
+                tokens = _num(msg["usage"].get("output_tokens"))
+                if cur and cur["key"] == key:
+                    cur["last"] = stamp
+                    cur["out"] = max(cur["out"], tokens)
+                else:
+                    flush()
+                    cur = {"key": key, "model": model, "start": last_user, "first": stamp,
+                           "last": stamp, "out": tokens}
+            flush()
+    out: list = []
+    for copies in best.values():
+        if len(copies) == 1:
+            out.append(copies[0])
+            continue
+        secs = sorted(c["sec"] for c in copies)
+        median = secs[len(secs) // 2]
+        # Copies that disagree on how long the call took can't all be right and none
+        # can be told apart, so the call is left out rather than guessed.
+        if (secs[-1] - secs[0]) <= 0.25 * median:
+            out.append(min(copies, key=lambda c: abs(c["sec"] - median)))
     return out
 
 

@@ -349,7 +349,7 @@ function DayDetail({ date, detail, enabled, rangeTokens, onClear }) {
             h('div', { style: { display: 'flex', gap: 6, fontSize: 12 } },
               h('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: m.model }, m.model),
               h('span', { style: { fontVariantNumeric: 'tabular-nums' } }, fmtNum(m.tokens)),
-              h('span', { title: m.speed && m.speed.calls ? 'measured over ' + m.speed.calls + ' calls' : 'no timing logged',
+              h('span', { title: m.speed && m.speed.calls ? (m.speed.tps == null ? 'only ' + m.speed.calls + ' timed call(s), too few for a rate' : 'measured over ' + m.speed.calls + ' calls') : 'no timing logged',
                 style: { width: 52, textAlign: 'right', color: m.speed && m.speed.tps != null ? 'var(--ui-text-secondary)' : 'var(--ui-text-quaternary)', fontVariantNumeric: 'tabular-nums' } }, fmtTps(m.speed && m.speed.tps) || '-'),
               h('span', { style: { width: 54, textAlign: 'right', ...S.faint } }, m.requests + ' calls')),
             h(ShareBar, { value: m.tokens, max: maxModel, color: SRC[m.src].color }))))),
@@ -415,7 +415,7 @@ function UsageTab({ data, range, setRange, enabled, setEnabled, loading }) {
           h('div', { style: { width: 86, fontSize: 11, color: 'var(--ui-text-secondary)' } }, h('span', { style: { display: 'inline-block', width: 7, height: 7, borderRadius: 2, background: SRC[m.src].color, marginRight: 5 } }), SRC[m.src].label),
           h('div', { style: { width: 58, textAlign: 'right' } }, fmtNum(m.requests)),
           h('div', { style: { width: 70, textAlign: 'right' } }, fmtNum(m.tokens)),
-          h('div', { title: m.speed && m.speed.calls ? 'measured over ' + m.speed.calls + ' calls (' + fmtNum(m.speed.tokens) + ' output tokens in ' + fmtNum(m.speed.seconds) + 's)' : 'no timing logged for this model',
+          h('div', { title: m.speed && m.speed.calls ? (m.speed.tps == null ? 'only ' + m.speed.calls + ' timed call(s), too few for a rate' : 'measured over ' + m.speed.calls + ' calls (' + fmtNum(m.speed.tokens) + ' output tokens in ' + fmtNum(m.speed.seconds) + 's)') : 'no timing logged for this model',
             style: { width: 56, textAlign: 'right', color: m.tps == null ? 'var(--ui-text-quaternary)' : 'var(--ui-text-secondary)', fontVariantNumeric: 'tabular-nums' } }, fmtTps(m.tps) || '-'),
           h('div', { style: { width: 64, textAlign: 'right', color: 'var(--ui-text-secondary)' } }, fmtMoney(m.cost))))),
     h('div', { style: S.card },
@@ -428,7 +428,7 @@ function UsageTab({ data, range, setRange, enabled, setEnabled, loading }) {
           s.reasoning ? h('span', { style: S.faint }, '(' + fmtNum(s.reasoning) + ' reasoning, included in output)') : null)
       })),
     h('div', { style: S.faint },
-      'Speed is output tokens over the model time each tool records: Grok CLI logs every call, Claude Code logs a turn summary, Hermes keeps no per-call timing, so its models show - (its live t/s is in the status bar). Counts come from local logs: ' + SOURCES.map(s => {
+      'Speed is output tokens over the model time each tool records: Grok CLI logs every call, Claude Code is timed per call from its session log, Hermes keeps no per-call timing, so its models show - (its live t/s is in the status bar). Counts come from local logs: ' + SOURCES.map(s => {
         const c = data.coverage[s.id]
         return s.label + ' ' + (c && c.first ? c.first.slice(0, 10) + ' to ' + c.last.slice(0, 10) : 'none')
       }).join('; ') + '. A session left open for several days is spread across its active days by message volume. Not tracked: ' + (data.not_tracked || []).map(n => n.name + ' (' + n.why + ')').join('; ') + '. Claude and Grok dollar figures are list-price estimates; subscriptions are not billed per token.'))
