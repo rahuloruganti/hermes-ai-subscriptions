@@ -336,10 +336,11 @@ def _local_day(ts: float) -> str:
 
 
 # ── Generation speed (output tokens per second of measured model time) ──────
-# Only sources that record timing contribute. Grok logs every call, Claude Code
-# logs a turn summary, and Hermes is timed by this plugin's own post_api_request
-# hook (plugin-data/ai-subscriptions/api_speed.jsonl). A provider with no timing
-# is left untimed rather than estimated.
+# Only sources that record timing contribute. Grok logs every call, Claude Code is
+# timed per finished call from its session log (a call counts once however many
+# resumed sessions replay it), and Hermes is timed by this plugin's own
+# post_api_request hook (plugin-data/ai-subscriptions/api_speed.jsonl). A provider
+# with no timing is left untimed rather than estimated.
 
 
 MIN_SPEED_CALLS = 3
