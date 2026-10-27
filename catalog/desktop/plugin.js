@@ -105,6 +105,33 @@ function rpc(method, params, ms) {
   return host.request(method, params || {}, ms)
 }
 
+const GAUGE_TITLES = { day: 'Today', week: 'This week', month: 'This month', top_tier: 'Large models' }
+
+// Usage-window plans (Hermes Plus etc.) report day/week/month/large-model gauges instead of one
+// credit bar. Hermes stamps them on the Nous row as plan_usage; reading it is a cache read.
+// Hermes copies gauges into usage.windows only while none is full, so this is read directly.
+function windowPlan(pu) {
+  if (!pu || pu.kind !== 'usage_window' || !Array.isArray(pu.gauges)) return null
+  const gauges = pu.gauges.filter(g => g && typeof g.left_fraction === 'number')
+  if (!gauges.some(g => g.scope === 'all')) return null
+  const windows = gauges.map(g => ({
+    label: GAUGE_TITLES[g.label] || g.title || g.label,
+    used_percent: Math.round((1 - Math.min(1, Math.max(0, g.left_fraction))) * 10000) / 100,
+    reset_at: g.resets_at_ms ? new Date(g.resets_at_ms).toISOString() : null,
+    scope: g.scope
+  }))
+  const notes = pu.paused_reason ? ['included usage paused (' + pu.paused_reason + ')'] : []
+  // credits_pay: true = keep-going is on and a top-up balance exists; false = it waits for the reset.
+  for (const w of windows) {
+    if (w.used_percent < 100) continue
+    const large = w.scope !== 'all'
+    if (pu.credits_pay === true) notes.push(w.label + ' used up: ' + (large ? 'large models now bill' : 'now spending') + ' top-up credits')
+    else if (pu.credits_pay === false) notes.push(w.label + ' used up: ' + (large ? 'large models wait' : 'waits') + ' for the reset')
+    else notes.push(w.label + ' used up')
+  }
+  return { windows, notes, plan: pu.plan || null }
+}
+
 async function loadPlans(refresh) {
   if (refresh) {
     // Hermes fetches provider quota in the background; ask, give it a moment, then read.
@@ -119,22 +146,27 @@ async function loadPlans(refresh) {
   const plans = []
   for (const row of (opts && opts.providers) || []) {
     if (!row || !row.authenticated || row.is_user_defined || SKIP_PROVIDERS.has(row.slug)) continue
-    const windows = ((row.usage && row.usage.windows) || []).map(w => ({ label: w.label, used_percent: w.used_percent, reset_at: w.resets_at }))
+    const wp = row.slug === 'nous' ? windowPlan(row.plan_usage) : null
+    const windows = wp ? wp.windows : ((row.usage && row.usage.windows) || []).map(w => ({ label: w.label, used_percent: w.used_percent, reset_at: w.resets_at }))
     if (!windows.length && !KNOWN.has(row.slug)) continue
-    plans.push({ key: row.slug, name: NAMES[row.slug] || row.name || row.slug, account: null, plan: null, windows, details: [], sources: [], pool: [], live: windows.length > 0, stamp, stale: false, failed: false })
+    plans.push({ key: row.slug, name: NAMES[row.slug] || row.name || row.slug, account: null, plan: wp ? wp.plan : null, windows, details: wp ? wp.notes : [], sources: [], pool: [], live: windows.length > 0, stamp, stale: false, failed: false })
   }
   if (bars && bars.available) {
     let nous = plans.find(p => p.key === 'nous')
     if (!nous) { nous = { key: 'nous', name: NAMES.nous, account: null, plan: null, windows: [], details: [], sources: [], pool: [], live: true, stamp, stale: false, failed: false }; plans.push(nous) }
-    nous.plan = bars.plan_name || null
+    // Gauge windows (set above) carry their own limits; the single credit bar is for credit plans.
+    const fromGauges = nous.windows.some(w => w.scope)
+    const notes = fromGauges ? nous.details : []
+    nous.plan = bars.plan_name || nous.plan || null
     nous.live = true
     nous.stamp = stamp
-    const bar = bars.plan_bar
+    const bar = fromGauges ? null : bars.plan_bar
     if (bar && bar.pct_used != null) nous.windows = [{ label: 'Plan credits', used_percent: bar.pct_used, reset_at: bars.renews_at || null }]
     nous.details = [
       bar ? bar.remaining_display + ' of ' + bar.total_display + ' plan credits left' : null,
       bars.has_topup ? 'top-up ' + bars.topup_remaining_display : null,
-      bars.renews_display ? 'renews ' + bars.renews_display : null
+      bars.renews_display ? 'renews ' + bars.renews_display : null,
+      ...notes
     ].filter(Boolean)
   }
   plans.sort((a, b) => {

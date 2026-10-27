@@ -973,14 +973,71 @@ def _fetch_copilot(auth: dict) -> dict:
     return _snap("copilot", plan, windows, details)
 
 
-def _fetch_nous(auth: dict) -> dict:
-    prov = (auth.get("providers") or {}).get("nous") or {}
-    token = str(prov.get("access_token") or "").strip()
-    if not token:
-        raise RuntimeError("not signed in to Nous")
-    base = str(prov.get("portal_base_url") or "").rstrip("/") or "https://portal.nousresearch.com"
-    data = _get_json(f"{base}/api/billing/subscription",
-                     {"Authorization": f"Bearer {token}", "Accept": "application/json"})
+_NOUS_GAUGE_TITLES = {"day": "Today", "week": "This week", "month": "This month",
+                      "top_tier": "Large models"}
+
+
+def _nous_gauges(window: Any) -> list:
+    """Validated usage-window gauges from the portal account payload.
+
+    Same acceptance rule Hermes applies (agent/credits_tracker.py): ids are unique strings,
+    used_bp is a number (basis points; a bool is not one), and there must be at least one
+    all-scope gauge. Anything else means "not a window plan" and the caller falls back.
+    """
+    out, seen = [], set()
+    for g in (window or {}).get("gauges") or []:
+        if not isinstance(g, dict) or not isinstance(g.get("id"), str) or g["id"] in seen:
+            continue
+        bp = g.get("used_bp")
+        if isinstance(bp, bool) or not isinstance(bp, (int, float)):
+            continue
+        seen.add(g["id"])
+        ms = g.get("resets_at_ms")
+        # A reset more than a year out (or not a positive number) is bad data, not a date.
+        ok_ms = (not isinstance(ms, bool) and isinstance(ms, (int, float)) and 0 < ms <= (time.time() + 366 * 86400) * 1000)
+        out.append({"id": g["id"], "scope": g.get("scope") or "all",
+                    "label": _NOUS_GAUGE_TITLES.get(g["id"]) or str(g.get("label") or g["id"]),
+                    "used": min(100.0, max(0.0, bp / 100.0)),
+                    "reset_at": datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat() if ok_ms else None})
+    return out if any(g["scope"] == "all" for g in out) else []
+
+
+def _nous_window_plan(acct: dict, gauges: list) -> dict:
+    window = acct.get("usage_window") or {}
+    sub = acct.get("subscription") or {}
+    paid = acct.get("paid_service_access") or {}
+    topup = acct.get("purchased_credits_remaining", paid.get("purchased_credits_remaining"))
+    try:
+        topup = float(topup)
+    except (TypeError, ValueError):
+        topup = None
+    keep_going = window.get("keep_going_on_credits")
+    windows = [{"label": g["label"], "used_percent": g["used"], "reset_at": g["reset_at"]} for g in gauges]
+    details = []
+    if sub.get("monthly_charge") is not None:
+        details.append(f"${_money(sub['monthly_charge'])}/month")
+    if sub.get("current_period_end"):
+        details.append(f"renews {str(sub['current_period_end'])[:10]}")
+    if topup is not None and topup > 0:
+        details.append(f"top-up credits ${_money(topup)}")
+    if window.get("paused_reason"):
+        details.append(f"included usage paused ({window['paused_reason']})")
+    # What a full allowance means depends on "Keep going on credits"; say it only when one is full.
+    for g in gauges:
+        if g["used"] < 100.0:
+            continue
+        large = g["scope"] != "all"
+        if keep_going and topup:
+            details.append(f"{g['label']} used up: " + ("large models now bill" if large else "now spending") + " top-up credits")
+        elif keep_going is False:
+            details.append(f"{g['label']} used up: " + ("large models wait" if large else "waits") + " for the reset")
+        else:
+            details.append(f"{g['label']} used up")
+    return _snap("nous", sub.get("plan"), windows, details)
+
+
+def _nous_credit_plan(base: str, headers: dict) -> dict:
+    data = _get_json(f"{base}/api/billing/subscription", headers)
     cur = data.get("current") or {}
     price = cur.get("dollarsPerMonthDisplay")
     if price is None:
@@ -1005,6 +1062,28 @@ def _fetch_nous(auth: dict) -> dict:
     elif cur.get("cancelAtPeriodEnd"):
         details.append("cancels at period end")
     return _snap("nous", cur.get("tierName"), windows, details)
+
+
+def _fetch_nous(auth: dict) -> dict:
+    prov = (auth.get("providers") or {}).get("nous") or {}
+    token = str(prov.get("access_token") or "").strip()
+    if not token:
+        raise RuntimeError("not signed in to Nous")
+    base = str(prov.get("portal_base_url") or "").rstrip("/") or "https://portal.nousresearch.com"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    # Window plans (Hermes Plus etc.) carry monthlyCredits 0 on the subscription route, so the
+    # account route is asked first, like Hermes does. Credit plans have no usage_window.
+    try:
+        acct = _get_json(f"{base}/api/oauth/account", headers)
+    except urllib.error.HTTPError as exc:
+        # Only a portal that lacks the route falls back; auth and server errors surface.
+        if exc.code != 404:
+            raise
+        acct = {}
+    gauges = _nous_gauges((acct or {}).get("usage_window"))
+    if gauges:
+        return _nous_window_plan(acct, gauges)
+    return _nous_credit_plan(base, headers)
 
 
 _REFRESH: dict = {"t": 0.0, "v": None}
